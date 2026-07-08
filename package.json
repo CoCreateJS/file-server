@@ -33,5 +33,10 @@
     "type": "GitHub Sponsors ❤",
     "url": "https://github.com/sponsors/CoCreate-app"
   },
-  "main": "./src/index.js"
+  "type": "module",
+  "main": "./src/index.js",
+  "dependencies": {
+    "@cocreate/server-side-render": "^1.12.8",
+    "@cocreate/sitemap": "^1.4.2"
+  }
 }

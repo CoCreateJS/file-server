@@ -21,385 +21,402 @@
 // you must obtain a commercial license from CoCreate LLC.
 // For details, visit <https://cocreate.app/licenses/> or contact us at sales@cocreate.app.
 
-class CoCreateFileSystem {
-    constructor(render, sitemap) {
-        this.render = render;
-        this.sitemap = sitemap;
-    }
+import * as render from '@cocreate/server-side-render';
+import * as sitemap from '@cocreate/sitemap';
 
-    async send(req, res, crud, organization, urlObject) {
-        try {
-            const hostname = urlObject.hostname;
-            let pathname = urlObject.pathname;
-            let statusCode = 200; // Default status code
+/**
+ * Main stateless entry point for the CoCreate File System request handler.
+ * Completely decoupled from constructor state—all required services (like crud)
+ * are passed directly into the function invocation.
+ *
+ * @param {Object} req - Incoming HTTP request
+ * @param {Object} res - Outgoing HTTP response
+ * @param {Object} crud - Crud database service instance
+ * @param {Object} organization - Active organization metadata
+ * @param {Object} urlObject - Parsed request URL parameters
+ */
+export async function send(req, res, crud, organization, urlObject) {
+    try {
+        const hostname = urlObject.hostname;
+        let pathname = urlObject.pathname;
+        let statusCode = 200; // Default status code
+        let resolveFile = null;
+        // --- determine preferred color scheme from browser headers ---
+        let theme;
+        const headerValue =
+            (req && req.headers && (
+                req.headers["sec-ch-prefers-color-scheme"] ||
+                req.headers["prefers-color-scheme"] ||
+                req.headers["x-prefers-color-scheme"] ||
+                req.headers["x-color-scheme"]
+            ));
+        if (typeof headerValue === "string") {
+            // take first token, strip quotes, normalize
+            const token = headerValue.split(",")[0].trim().replace(/^"|"$/g, "").toLowerCase();
+            if (token === "dark" || token === "light") theme = token;
+        }
+        // optional: expose detected theme to clients / downstream code
+        if (theme) res.setHeader("X-Preferred-Color-Scheme", theme);
+        // --- end theme detection ---
 
-            // --- determine preferred color scheme from browser headers ---
-            let theme;
-            const headerValue =
-                (req && req.headers && (
-                    req.headers["sec-ch-prefers-color-scheme"] ||
-                    req.headers["prefers-color-scheme"] ||
-                    req.headers["x-prefers-color-scheme"] ||
-                    req.headers["x-color-scheme"]
-                ));
-            if (typeof headerValue === "string") {
-                // take first token, strip quotes, normalize
-                const token = headerValue.split(",")[0].trim().replace(/^"|"$/g, "").toLowerCase();
-                if (token === "dark" || token === "light") theme = token;
+        let data = {
+            method: "object.read",
+            host: hostname,
+            array: "files",
+            $filter: {
+                query: {
+                    host: { $in: [hostname, "*"] }
+                },
+                limit: 1
             }
-            // optional: expose detected theme to clients / downstream code
-            if (theme) res.setHeader("X-Preferred-Color-Scheme", theme);
-            // --- end theme detection ---
+        };
 
-            let data = {
-                method: "object.read",
-                host: hostname,
-                array: "files",
-                $filter: {
-                    query: {
-                        host: { $in: [hostname, "*"] }
-                    },
-                    limit: 1
+        let organization_id;
+        if (!organization || organization.error) {
+            let hostNotFound = await getDefaultFile("/hostNotFound.html");
+            return sendResponse(hostNotFound.object[0].src, 404, {
+                "Content-Type": hostNotFound.object[0]["content-type"] || "text/html"
+            });
+        }
+
+        organization_id = organization._id;
+        data.organization_id = organization_id;
+
+        res.setHeader("organization", organization_id);
+        res.setHeader("storage", !!organization.storage);
+        res.setHeader("Access-Control-Allow-Origin", "*");
+        res.setHeader("Access-Control-Allow-Methods", "");
+        res.setHeader(
+            "Access-Control-Allow-Headers",
+            "Content-Type, Authorization"
+        );
+
+        let active = crud.wsManager.organizations.get(organization_id);
+        if (active === false) {
+            let balanceFalse = await getDefaultFile("/balanceFalse.html");
+            return sendResponse(balanceFalse.object[0].src, 403, {
+                "Content-Type": balanceFalse.object[0]["content-type"] || "text/html",
+                "Account-Balance": "false",
+                storage: organization.storage
+            });
+        }
+
+        let parameters = urlObject.searchParams;
+        if (parameters.size) {
+            console.log("parameters", parameters);
+        }
+
+        // --- Trailing slash enforcement for directory paths ---
+        // If the requested path is a directory (does not end with '/' and does not contain a '.' in the final segment),
+        // we send a 301 Permanent Redirect to the same path ending with a '/' to ensure relative assets resolve correctly.
+        if (!pathname.endsWith("/") && !pathname.startsWith("/.well-known/acme-challenge")) {
+            let lastSegment = pathname.split("/").slice(-1)[0];
+            if (!lastSegment.includes(".")) {
+                const search = urlObject.search || "";
+                res.writeHead(301, { Location: pathname + "/" + search });
+                return res.end();
+            }
+        }
+
+        if (pathname.endsWith("/")) {
+            pathname += "index.html";
+        }
+
+        // Match both /en/ and /en-US/ style URLs
+        const bcp47Regex = /^\/([a-zA-Z]{2,3}(?:-[a-zA-Z0-9]{2,8})?)\//;
+        const langMatch = pathname.match(bcp47Regex);
+        let lang, langRegion;
+        if (langMatch) {
+            langRegion = langMatch[1];
+            lang = langRegion.split("-")[0]; // Get just the base language (e.g., 'en', 'es', 'fr')
+            let basePathname = pathname.replace("/" + langRegion, "");
+            data.$filter.query.pathname = basePathname;
+        } else {
+            // No language in URL, try Accept-Language header
+            let acceptLang = req.headers && req.headers["accept-language"];
+            if (acceptLang) {
+                // Parse the Accept-Language header, get the first language
+                let preferred = acceptLang.split(",")[0].trim();
+                if (preferred) {
+                    lang = preferred.split("-")[0];
+                    langRegion = preferred;
                 }
+            }
+            data.$filter.query.pathname = pathname;
+        }
+
+        let file;
+        if (
+            pathname.startsWith("/dist") ||
+            pathname.startsWith("/admin") ||
+            [
+                "/403.html",
+                "/404.html",
+                "/offline.html",
+                "/manifest.webmanifest",
+                "/service-worker.js"
+            ].includes(pathname)
+        ) {
+            file = await getDefaultFile(pathname);
+        } else {
+            file = await crud.send(data);
+        }
+
+        // --- Wildcard fallback ---
+        if (!file || !file.object || !file.object[0]) {
+            pathname = urlObject.pathname;
+            let lastIndex = pathname.lastIndexOf("/");
+            let wildcardPath = pathname.substring(0, lastIndex + 1);
+            let wildcard = pathname.substring(lastIndex + 1);
+
+            if (wildcard.includes(".")) {
+                let fileLastIndex = wildcard.lastIndexOf(".");
+                let fileExtension = wildcard.substring(fileLastIndex);
+                wildcard = wildcardPath + "*" + fileExtension; // Create wildcard for file name
+            } else {
+                wildcard = wildcardPath + "*/index.html"; // Append '*' if it's just a path or folder
+            }
+
+            data.$filter.query.pathname = wildcard;
+            file = await crud.send(data);
+        }
+
+        // If file is completely missing, fetch default 404 file and set status
+        if (!file || !file.object || !file.object[0]) {
+            statusCode = 404;
+            let pageNotFound = await getDefaultFile("/404.html");
+            file = pageNotFound.object[0];
+        } else {
+            file = file.object[0];
+        }
+
+        // If the file is not public, fetch default 403 file and set status
+        if (!file["public"] || file["public"] === "false") {
+            statusCode = 403;
+            let pageForbidden = await getDefaultFile("/403.html");
+            file = pageForbidden.object[0];
+        }
+
+        let src;
+        if (file["src"]) {
+            src = file["src"];
+        } else {
+            try {
+                let fileSrc = await crud.send({
+                    method: "object.read",
+                    host: hostname,
+                    array: file["array"],
+                    object: {
+                        _id: file._id
+                    },
+                    organization_id
+                });
+                src = fileSrc[file["name"]];
+            } catch (err) {
+                console.error("Error fetching file src:", err);
+            }
+        }
+
+        // If src is still missing, fallback to 404 file
+        if (!src) {
+            statusCode = 404;
+            let pageNotFound = await getDefaultFile("/404.html");
+            file = pageNotFound.object[0];
+            src = file["src"];
+        }
+
+        let modifiedOn = file.modified || file.created;
+        if (modifiedOn) {
+            modifiedOn = modifiedOn.on;
+            if (modifiedOn instanceof Date)
+                modifiedOn = modifiedOn.toISOString();
+            res.setHeader("Last-Modified", modifiedOn);
+        }
+
+        let contentType = file["content-type"] || "text/html";
+
+        // Normalize and decode src based on content-type and pathname.
+        async function normalizeSrc(src, contentType, pathname) {
+            const isBase64Only = (s) =>
+                typeof s === "string" && /^[A-Za-z0-9+/]+={0,2}$/.test(s) && s.length % 4 === 0;
+
+            const parseDataUri = (s) => {
+                const m = /^data:([^;]+)(;base64)?,(.*)$/is.exec(s);
+                if (!m) return null;
+                return { mime: m[1].toLowerCase(), isBase64: !!m[2], data: m[3] };
             };
 
-            let organization_id;
-            if (!organization || organization.error) {
-                let hostNotFound = await getDefaultFile("/hostNotFound.html");
-                return sendResponse(hostNotFound.object[0].src, 404, {
-                    "Content-Type": hostNotFound.object[0]["content-type"] || "text/html"
-                });
+            // Fonts: data:font/...;base64 or plain base64 -> Buffer
+            if (contentType.startsWith("font/") || /\.(woff2?|ttf|otf)$/i.test(pathname)) {
+                if (Buffer.isBuffer(src)) return src;
+                if (typeof src !== "string") throw new Error("Invalid font src");
+                const d = parseDataUri(src);
+                if (d && d.isBase64) return Buffer.from(d.data, "base64");
+                if (isBase64Only(src)) return Buffer.from(src, "base64");
+                throw new Error("Font data is not valid base64 or data URI");
             }
 
-            organization_id = organization._id;
-            data.organization_id = organization_id;
-
-            res.setHeader("organization", organization_id);
-            res.setHeader("storage", !!organization.storage);
-            res.setHeader("Access-Control-Allow-Origin", "*");
-            res.setHeader("Access-Control-Allow-Methods", "");
-            res.setHeader(
-                "Access-Control-Allow-Headers",
-                "Content-Type, Authorization"
-            );
-
-            let active = crud.wsManager.organizations.get(organization_id);
-            if (active === false) {
-                let balanceFalse = await getDefaultFile("/balanceFalse.html");
-                return sendResponse(balanceFalse.object[0].src, 403, {
-                    "Content-Type": balanceFalse.object[0]["content-type"] || "text/html",
-                    "Account-Balance": "false",
-                    storage: organization.storage
-                });
-            }
-
-            let parameters = urlObject.searchParams;
-            if (parameters.size) {
-                console.log("parameters", parameters);
-            }
-
-            // --- Trailing slash enforcement for directory paths ---
-            // If the requested path is a directory (does not end with '/' and does not contain a '.' in the final segment),
-            // we send a 301 Permanent Redirect to the same path ending with a '/' to ensure relative assets resolve correctly.
-            if (!pathname.endsWith("/") && !pathname.startsWith("/.well-known/acme-challenge")) {
-                let lastSegment = pathname.split("/").slice(-1)[0];
-                if (!lastSegment.includes(".")) {
-                    const search = urlObject.search || "";
-                    res.writeHead(301, { Location: pathname + "/" + search });
-                    return res.end();
-                }
-            }
-
-            if (pathname.endsWith("/")) {
-                pathname += "index.html";
-            }
-
-            // Match both /en/ and /en-US/ style URLs
-            const bcp47Regex = /^\/([a-zA-Z]{2,3}(?:-[a-zA-Z0-9]{2,8})?)\//;
-            const langMatch = pathname.match(bcp47Regex);
-            let lang, langRegion;
-            if (langMatch) {
-                langRegion = langMatch[1];
-                lang = langRegion.split("-")[0]; // Get just the base language (e.g., 'en', 'es', 'fr')
-                let basePathname = pathname.replace("/" + langRegion, "");
-                data.$filter.query.pathname = basePathname;
-            } else {
-                // No language in URL, try Accept-Language header
-                let acceptLang = req.headers && req.headers["accept-language"];
-                if (acceptLang) {
-                    // Parse the Accept-Language header, get the first language
-                    let preferred = acceptLang.split(",")[0].trim();
-                    if (preferred) {
-                        lang = preferred.split("-")[0];
-                        langRegion = preferred;
-                        // --- BEGIN OPTIONAL REDIRECT ---
-                        // Uncomment to enable automatic redirect to language-specific path
-                        // let newPath = `/${preferred}${pathname.startsWith('/') ? '' : '/'}${pathname.replace(/^\//, '')}`;
-                        // res.writeHead(302, { Location: newPath });
-                        // return res.end();
-                        // --- END OPTIONAL REDIRECT ---
+            // Data URIs
+            if (typeof src === "string") {
+                const d = parseDataUri(src);
+                if (d) {
+                    if (d.mime === "image/svg+xml") {
+                        if (d.isBase64) return Buffer.from(d.data, "base64").toString("utf8");
+                        try {
+                            return decodeURIComponent(d.data);
+                        } catch (_) {
+                            return d.data;
+                        }
                     }
-                }
-                data.$filter.query.pathname = pathname;
-            }
-
-            let file;
-            if (
-                pathname.startsWith("/dist") ||
-                pathname.startsWith("/admin") ||
-                [
-                    "/403.html",
-                    "/404.html",
-                    "/offline.html",
-                    "/manifest.webmanifest",
-                    "/service-worker.js"
-                ].includes(pathname)
-            ) {
-                file = await getDefaultFile(pathname);
-            } else {
-                file = await crud.send(data);
-            }
-
-            // --- Wildcard fallback ---
-            if (!file || !file.object || !file.object[0]) {
-                pathname = urlObject.pathname;
-                let lastIndex = pathname.lastIndexOf("/");
-                let wildcardPath = pathname.substring(0, lastIndex + 1);
-                let wildcard = pathname.substring(lastIndex + 1);
-
-                if (wildcard.includes(".")) {
-                    let fileLastIndex = wildcard.lastIndexOf(".");
-                    let fileExtension = wildcard.substring(fileLastIndex);
-                    wildcard = wildcardPath + "*" + fileExtension; // Create wildcard for file name
-                } else {
-                    wildcard = wildcardPath + "*/index.html"; // Append '*' if it's just a path or folder
-                }
-
-                data.$filter.query.pathname = wildcard;
-                file = await crud.send(data);
-            }
-
-            // If file is completely missing, fetch default 404 file and set status
-            if (!file || !file.object || !file.object[0]) {
-                statusCode = 404;
-                let pageNotFound = await getDefaultFile("/404.html");
-                file = pageNotFound.object[0];
-            } else {
-                file = file.object[0];
-            }
-
-            // If the file is not public, fetch default 403 file and set status
-            if (!file["public"] || file["public"] === "false") {
-                statusCode = 403;
-                let pageForbidden = await getDefaultFile("/403.html");
-                file = pageForbidden.object[0];
-            }
-
-            let src;
-            if (file["src"]) {
-                src = file["src"];
-            } else {
-                try {
-                    let fileSrc = await crud.send({
-                        method: "object.read",
-                        host: hostname,
-                        array: file["array"],
-                        object: {
-                            _id: file._id
-                        },
-                        organization_id
-                    });
-                    src = fileSrc[file["name"]];
-                } catch (err) {
-                    console.error("Error fetching file src:", err);
-                }
-            }
-
-            // If src is still missing, fallback to 404 file
-            if (!src) {
-                statusCode = 404;
-                let pageNotFound = await getDefaultFile("/404.html");
-                file = pageNotFound.object[0];
-                src = file["src"];
-            }
-
-            let modifiedOn = file.modified || file.created;
-            if (modifiedOn) {
-                modifiedOn = modifiedOn.on;
-                if (modifiedOn instanceof Date)
-                    modifiedOn = modifiedOn.toISOString();
-                res.setHeader("Last-Modified", modifiedOn);
-            }
-
-            let contentType = file["content-type"] || "text/html";
-
-            // Normalize and decode src based on content-type and pathname.
-            async function normalizeSrc(src, contentType, pathname) {
-                const isBase64Only = (s) =>
-                    typeof s === "string" && /^[A-Za-z0-9+/]+={0,2}$/.test(s) && s.length % 4 === 0;
-
-                const parseDataUri = (s) => {
-                    // returns { mime, isBase64, data } or null
-                    const m = /^data:([^;]+)(;base64)?,(.*)$/is.exec(s);
-                    if (!m) return null;
-                    return { mime: m[1].toLowerCase(), isBase64: !!m[2], data: m[3] };
-                };
-
-                // Fonts: data:font/...;base64 or plain base64 -> Buffer
-                if (contentType.startsWith("font/") || /\.(woff2?|ttf|otf)$/i.test(pathname)) {
-                    if (Buffer.isBuffer(src)) return src;
-                    if (typeof src !== "string") throw new Error("Invalid font src");
-                    const d = parseDataUri(src);
-                    if (d && d.isBase64) return Buffer.from(d.data, "base64");
-                    // maybe stored as bare base64
-                    if (isBase64Only(src)) return Buffer.from(src, "base64");
-                    throw new Error("Font data is not valid base64 or data URI");
-                }
-
-                // Data URIs
-                if (typeof src === "string") {
-                    const d = parseDataUri(src);
-                    if (d) {
-                        // SVG: decode to utf8 string so browsers render SVG correctly
-                        if (d.mime === "image/svg+xml") {
-                            if (d.isBase64) return Buffer.from(d.data, "base64").toString("utf8");
-                            // URI-encoded SVG payload
-                            try {
-                                return decodeURIComponent(d.data);
-                            } catch (_) {
-                                return d.data;
-                            }
-                        }
-                        // Raster images, Icons, Video, and Audio -> Buffer
-                        // Added x-icon, vnd.microsoft.icon, and ico to process icon files properly
-                        if (/^(image\/(png|jpe?g|webp|bmp|gif|x-icon|vnd\.microsoft\.icon|ico)|video\/.*|audio\/.*)$/i.test(d.mime)) {
-                            if (d.isBase64) return Buffer.from(d.data, "base64");
-                        }
-                        // If it's a text data URI (e.g., xml) and not base64, return decoded text
-                        if (!d.isBase64) {
-                            try {
-                                return decodeURIComponent(d.data);
-                            } catch (_) {
-                                return d.data;
-                            }
+                    if (/^(image\/(png|jpe?g|webp|bmp|gif|x-icon|vnd\.microsoft\.icon|ico)|video\/.*|audio\/.*)$/i.test(d.mime)) {
+                        if (d.isBase64) return Buffer.from(d.data, "base64");
+                    }
+                    if (!d.isBase64) {
+                        try {
+                            return decodeURIComponent(d.data);
+                        } catch (_) {
+                            return d.data;
                         }
                     }
                 }
+            }
 
-                // Plain base64-only string: decode to Buffer only for binary content types
-                if (isBase64Only(src)) {
-                    if (
-                        contentType.startsWith("image/") ||
-                        contentType.startsWith("font/") ||
-                        contentType.startsWith("video/") ||
-                        contentType.startsWith("audio/") ||
-                        contentType === "application/octet-stream"
-                    ) {
-                        return Buffer.from(src, "base64");
-                    }
-                    // textual content kept as-is
-                    return src;
+            // Plain base64-only string
+            if (isBase64Only(src)) {
+                if (
+                    contentType.startsWith("image/") ||
+                    contentType.startsWith("font/") ||
+                    contentType.startsWith("video/") ||
+                    contentType.startsWith("audio/") ||
+                    contentType === "application/octet-stream"
+                ) {
+                    return Buffer.from(src, "base64");
                 }
-
-                // HTML rendering
-                if (contentType === "text/html") {
-                    return await this.render.HTML(
-                        file,
-                        organization,
-                        urlObject,
-                        langRegion,
-                        lang,
-                        theme
-                    );
-                }
-
-                // XML host replacement if src is string
-                if ((contentType === "text/xml" || contentType === "application/xml") && typeof src === "string") {
-                    const protocol = "https://";
-                    return src.replaceAll("{{$host}}", `${protocol}${hostname}`);
-                }
-
-                // Otherwise return as-is (string, Buffer, object)
                 return src;
             }
 
+            // HTML rendering - calling render.HTML with clean positional arguments!
+            if (contentType === "text/html") {
+                return await render.HTML({
+                    file,
+                    organization,
+                    urlObject,
+                    langRegion,
+                    lang,
+                    theme,
+                    resolveFile,
+                    crud
+                });
+            }
+
+            // XML host replacement
+            if ((contentType === "text/xml" || contentType === "application/xml") && typeof src === "string") {
+                const protocol = "https://";
+                return src.replaceAll("{{$host}}", `${protocol}${hostname}`);
+            }
+
+            return src;
+        }
+
+        try {
+            src = await normalizeSrc(src, contentType, pathname);
+        } catch (err) {
+            console.error("Error processing file src:", err && err.message);
+            statusCode = 500;
+            let errorPage = await getDefaultFile("/404.html");
+            file = errorPage.object[0];
+            src = file.src;
+            contentType = file["content-type"] || "text/html";
+        }
+        
+        // Send the response with our calculated status code
+        sendResponse(src, statusCode, { "Content-Type": contentType });
+        
+        // Pure functional call to sitemap checking using sitemap.check
+        await sitemap.check({ file, host: hostname, crud });
+
+        function sendResponse(src, statusCode, headers) {
             try {
-                src = await normalizeSrc.call(this, src, contentType, pathname);
-            } catch (err) {
-                console.error("Error processing file src:", err && err.message);
-                statusCode = 500;
-                let errorPage = await getDefaultFile("/404.html");
-                file = errorPage.object[0];
-                src = file.src;
-                contentType = file["content-type"] || "text/html";
-            }
-            
-            // Send the response with our calculated status code
-            sendResponse(src, statusCode, { "Content-Type": contentType });
-            this.sitemap.check(file, hostname);
-
-            function sendResponse(src, statusCode, headers) {
-                try {
-                    let cacheControl;
-                    if (statusCode >= 400) {
-                        cacheControl = "no-cache, no-store, must-revalidate";
-                    } else if (
-                        file &&
-                        file["cache-control"] !== undefined &&
-                        file["cache-control"] !== null
-                    ) {
-                        const val = file["cache-control"];
-                        if (typeof val === "number" || /^\s*\d+\s*$/.test(val)) {
-                            // If it's numeric (number or numeric string) treat it as max-age.
-                            cacheControl = `public, max-age=${String(
-                                val
-                            ).trim()};`;
-                        } else {
-                            // use the value verbatim (allow full Cache-Control strings like "no-cache" or "public, max-age=600")
-                            cacheControl = val;
-                        }
+                let cacheControl;
+                if (statusCode >= 400) {
+                    cacheControl = "no-cache, no-store, must-revalidate";
+                } else if (
+                    file &&
+                    file["cache-control"] !== undefined &&
+                    file["cache-control"] !== null
+                ) {
+                    const val = file["cache-control"];
+                    if (typeof val === "number" || /^\s*\d+\s*$/.test(val)) {
+                        cacheControl = `public, max-age=${String(val).trim()};`;
                     } else {
-                        cacheControl = organization["cache-control"] || "public, max-age=3600";
+                        cacheControl = val;
                     }
-
-                    // Always override/set Cache-Control header so the response aligns with the file metadata/defaults
-                    headers["Cache-Control"] = cacheControl;
-                    // Advertise that we accept the Sec-CH-Prefers-Color-Scheme client hint.
-                    // After the browser sees this in a response it may include
-                    // the Sec-CH-Prefers-Color-Scheme header on subsequent requests.
-                    headers["Accept-CH"] = "Sec-CH-Prefers-Color-Scheme";
-                    // optional: tell browser how long to remember this preference (seconds)
-                    headers["Accept-CH-Lifetime"] = "86400";
-                    // ensure caches/proxies vary responses by this hint
-                    headers["Vary"] = headers["Vary"]
-                        ? headers["Vary"] + ", Sec-CH-Prefers-Color-Scheme"
-                        : "Sec-CH-Prefers-Color-Scheme";
-
-                    if (src instanceof Uint8Array || Buffer.isBuffer(src)) {
-                        // Ensure binary data is sent as-is
-                    } else if (typeof src === "object") {
-                        src = JSON.stringify(src);
-                    }
-
-                    if (organization_id)
-                        crud.wsManager.emit("setBandwidth", {
-                            type: "out",
-                            data: src,
-                            organization_id
-                        });
-                    res.writeHead(statusCode, headers);
-                    return res.end(src);
-                } catch (error) {
-                    console.log(error);
+                } else {
+                    cacheControl = organization["cache-control"] || "public, max-age=3600";
                 }
-            }
 
-            async function getDefaultFile(fileName) {
-                data.$filter.query.pathname = fileName;
-                // data.$filter.query.$or[0] = { pathname: fileName }
-                let defaultFile;
-                if (fileName !== "/hostNotFound.html")
-                    defaultFile = await crud.send(data);
+                headers["Cache-Control"] = cacheControl;
+                headers["Accept-CH"] = "Sec-CH-Prefers-Color-Scheme";
+                headers["Accept-CH-Lifetime"] = "86400";
+                headers["Vary"] = headers["Vary"]
+                    ? headers["Vary"] + ", Sec-CH-Prefers-Color-Scheme"
+                    : "Sec-CH-Prefers-Color-Scheme";
+
+                if (src instanceof Uint8Array || Buffer.isBuffer(src)) {
+                    // binary data
+                } else if (typeof src === "object") {
+                    src = JSON.stringify(src);
+                }
+
+                if (organization_id)
+                    crud.wsManager.emit("setBandwidth", {
+                        type: "out",
+                        data: src,
+                        organization_id
+                    });
+                res.writeHead(statusCode, headers);
+                return res.end(src);
+            } catch (error) {
+                console.log(error);
+            }
+        }
+
+        async function getDefaultFile(fileName) {
+            data.$filter.query.pathname = fileName;
+            let defaultFile;
+            if (fileName !== "/hostNotFound.html")
+                defaultFile = await crud.send(data);
+
+            if (
+                defaultFile &&
+                defaultFile.object &&
+                defaultFile.object[0] &&
+                defaultFile.object[0].src
+            ) {
+                return defaultFile;
+            } else {
+                data.$filter.query.host.$in = ["*"];
+                data.organization_id = process.env.organization_id;
+
+                if (fileName.startsWith("/admin"))
+                    data.$filter.query.pathname =
+                        "/superadmin" + fileName.replace("/admin", "");
+
+                defaultFile = await crud.send(data);
+
+                if (fileName !== "/hostNotFound.html") {
+                    crud.wsManager.emit("setBandwidth", {
+                        type: "out",
+                        data,
+                        organization_id
+                    });
+
+                    crud.wsManager.emit("setBandwidth", {
+                        type: "in",
+                        data: defaultFile,
+                        organization_id
+                    });
+                }
 
                 if (
                     defaultFile &&
@@ -407,98 +424,64 @@ class CoCreateFileSystem {
                     defaultFile.object[0] &&
                     defaultFile.object[0].src
                 ) {
+                    if (fileName.startsWith("/admin")) {
+                        data.object[0].directory = "admin";
+                        data.object[0].path =
+                            "/admin" +
+                            data.object[0].path.replace("/superadmin", "");
+                        data.object[0].pathname = fileName;
+                    }
+
+                    crud.send({
+                        method: "object.create",
+                        host: hostname,
+                        array: "files",
+                        object: defaultFile.object[0],
+                        organization_id
+                    });
+
                     return defaultFile;
                 } else {
-                    data.$filter.query.host.$in = ["*"];
-                    data.organization_id = process.env.organization_id;
-
-                    if (fileName.startsWith("/admin"))
-                        data.$filter.query.pathname =
-                            "/superadmin" + fileName.replace("/admin", "");
-
-                    defaultFile = await crud.send(data);
-
-                    if (fileName !== "/hostNotFound.html") {
-                        crud.wsManager.emit("setBandwidth", {
-                            type: "out",
-                            data,
-                            organization_id
-                        });
-
-                        crud.wsManager.emit("setBandwidth", {
-                            type: "in",
-                            data: defaultFile,
-                            organization_id
-                        });
+                    switch (fileName) {
+                        case "/403.html":
+                            defaultFile.object = [
+                                {
+                                    src: `${pathname} access not allowed for ${organization_id}`
+                                }
+                            ];
+                            break;
+                        case "/404.html":
+                            defaultFile.object = [
+                                {
+                                    src: `${pathname} could not be found for ${organization_id}`
+                                }
+                            ];
+                            break;
+                        case "/balanceFalse.html":
+                            defaultFile.object = [
+                                {
+                                    src: "This organizations account balance has fallen bellow 0: "
+                                }
+                            ];
+                            break;
+                        case "/hostNotFound.html":
+                            defaultFile.object = [
+                                {
+                                    src:
+                                        "An organization could not be found using the host: " +
+                                        hostname +
+                                        " in platformDB: " +
+                                        process.env.organization_id
+                                }
+                            ];
+                            break;
                     }
-
-                    if (
-                        defaultFile &&
-                        defaultFile.object &&
-                        defaultFile.object[0] &&
-                        defaultFile.object[0].src
-                    ) {
-                        if (fileName.startsWith("/admin")) {
-                            data.object[0].directory = "admin";
-                            data.object[0].path =
-                                "/admin" +
-                                data.object[0].path.replace("/superadmin", "");
-                            data.object[0].pathname = fileName;
-                        }
-
-                        crud.send({
-                            method: "object.create",
-                            host: hostname,
-                            array: "files",
-                            object: defaultFile.object[0],
-                            organization_id
-                        });
-
-                        return defaultFile;
-                    } else {
-                        switch (fileName) {
-                            case "/403.html":
-                                defaultFile.object = [
-                                    {
-                                        src: `${pathname} access not allowed for ${organization_id}`
-                                    }
-                                ];
-                                break;
-                            case "/404.html":
-                                defaultFile.object = [
-                                    {
-                                        src: `${pathname} could not be found for ${organization_id}`
-                                    }
-                                ];
-                                break;
-                            case "/balanceFalse.html":
-                                defaultFile.object = [
-                                    {
-                                        src: "This organizations account balance has fallen bellow 0: "
-                                    }
-                                ];
-                                break;
-                            case "/hostNotFound.html":
-                                defaultFile.object = [
-                                    {
-                                        src:
-                                            "An organization could not be found using the host: " +
-                                            hostname +
-                                            " in platformDB: " +
-                                            process.env.organization_id
-                                    }
-                                ];
-                                break;
-                        }
-                        return defaultFile;
-                    }
+                    return defaultFile;
                 }
             }
-        } catch (error) {
-            res.writeHead(400, { "Content-Type": "text/plain" });
-            res.end("Invalid host format");
         }
+    } catch (error) {
+        res.writeHead(400, { "Content-Type": "text/plain" });
+        res.end("Invalid host format");
     }
 }
-
-module.exports = CoCreateFileSystem;
