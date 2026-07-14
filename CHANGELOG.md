@@ -1,3 +1,22 @@
+# [1.20.0](https://github.com/CoCreate-app/CoCreate-file-server/compare/v1.19.1...v1.20.0) (2026-07-14)
+
+
+### Bug Fixes
+
+* add redirects for missing and forbidden files to /404.html and /403.html ([906e874](https://github.com/CoCreate-app/CoCreate-file-server/commit/906e874fbf0790f3e08a119b5215f0e6e53c023b))
+* improve HTML request handling and response for 404 and 403 errors ([b78e21d](https://github.com/CoCreate-app/CoCreate-file-server/commit/b78e21de0887f37f3cc0156c339d6203c241a697))
+* removed post install ([95cc099](https://github.com/CoCreate-app/CoCreate-file-server/commit/95cc099f2e6d79755ded981543e7e1ea9b78a08d))
+* semantic version handling. Reorganize .gitignore for improved clarity and structure ([cabc86c](https://github.com/CoCreate-app/CoCreate-file-server/commit/cabc86c16a7a9ad6855e4bd529a4df060a6e11a8))
+* streamline error handling and response for missing files and improve status code management ([3f9b253](https://github.com/CoCreate-app/CoCreate-file-server/commit/3f9b25329e31d9736d635e22b5ff99244f698f53))
+* update module export to ES6 syntax in release.config.js ([ecee757](https://github.com/CoCreate-app/CoCreate-file-server/commit/ecee757539946a0304d6c8551b74969a8cf6c3f3))
+* update package.json and refactor index.js for module compatibility ([b140de1](https://github.com/CoCreate-app/CoCreate-file-server/commit/b140de1b20b727c37333be5cf8d36543c892daca))
+
+
+### Features
+
+* enforce trailing slash for directory paths in URL handling ([aab2d0e](https://github.com/CoCreate-app/CoCreate-file-server/commit/aab2d0eaf095efe302680f1ba5a5a4eeba1b0649))
+* update package.json and refactor index.js to use ES modules ([fd121ff](https://github.com/CoCreate-app/CoCreate-file-server/commit/fd121ffa438d174e3a11b2bec8d001718c193e08))
+
 ## [1.19.1](https://github.com/CoCreate-app/CoCreate-file-server/compare/v1.19.0...v1.19.1) (2026-04-15)
 
 
