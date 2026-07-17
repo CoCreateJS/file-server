@@ -16,9 +16,9 @@
     "access": "public"
   },
   "scripts": {
-    "start": "npx webpack --config webpack.config.js",
-    "build": "npx webpack --mode=production --config webpack.config.js",
-    "dev": "npx webpack --config webpack.config.js --watch"
+    "start": "webpack --config webpack.config.js",
+    "build": "webpack --mode=production --config webpack.config.js",
+    "dev": "webpack --config webpack.config.js --watch"
   },
   "repository": {
     "type": "git",
@@ -37,7 +37,7 @@
   "type": "module",
   "main": "./src/index.js",
   "dependencies": {
-    "@cocreate/server-side-render": "^1.12.8",
-    "@cocreate/sitemap": "^1.4.2"
+    "@cocreate/server-side-render": "^1.14.0",
+    "@cocreate/sitemap": "^1.6.0"
   }
 }
