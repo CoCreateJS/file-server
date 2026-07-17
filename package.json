@@ -1,6 +1,6 @@
 {
   "name": "@cocreate/file-server",
-  "version": "1.19.1",
+  "version": "1.21.0",
   "description": "A simple file-server component in vanilla javascript. Easily configured using HTML5 data-attributes and/or JavaScript API.",
   "keywords": [
     "file-server",
@@ -18,7 +18,8 @@
   "scripts": {
     "start": "npx webpack --config webpack.config.js",
     "build": "npx webpack --mode=production --config webpack.config.js",
-    "dev": "npx webpack --config webpack.config.js --watch"  },
+    "dev": "npx webpack --config webpack.config.js --watch"
+  },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/CoCreate-app/CoCreate-file-server.git"

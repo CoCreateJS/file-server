@@ -1,3 +1,10 @@
+# [1.21.0](https://github.com/CoCreate-app/CoCreate-file-server/compare/v1.20.0...v1.21.0) (2026-07-17)
+
+
+### Features
+
+* update automated workflow and release configuration for improved semantic release handling ([46e48c9](https://github.com/CoCreate-app/CoCreate-file-server/commit/46e48c906291f7939b69ff4064f4dd5413649d87))
+
 # [1.20.0](https://github.com/CoCreate-app/CoCreate-file-server/compare/v1.19.1...v1.20.0) (2026-07-14)
 
 
