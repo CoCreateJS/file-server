@@ -316,16 +316,15 @@ export async function getDefaultFile({ fileName, hostname, organizationId, crud 
 
     defaultFile = await activeCrud.send(queryData);
 
-    const wsManager = server ? server.wsManager : null;
-    if (fileName !== "/hostNotFound.html" && organizationId && wsManager) {
-        wsManager.emit("setBandwidth", {
-            type: "out",
+    if (fileName !== "/hostNotFound.html" && organizationId) {
+        process.emit("usage", {
+            type: "egress",
             data: queryData,
             organization_id: organizationId
         });
 
-        wsManager.emit("setBandwidth", {
-            type: "in",
+        process.emit("usage", {
+            type: "ingress",
             data: defaultFile,
             organization_id: organizationId
         });
@@ -583,10 +582,9 @@ export async function sendResponse({ res, src, statusCode, headers, file, organi
             src = JSON.stringify(src);
         }
 
-        const wsManager = server ? server.wsManager : null;
-        if (organizationId && activeCrud && wsManager) {
-            wsManager.emit("setBandwidth", {
-                type: "out",
+        if (organizationId) {
+            process.emit("usage", {
+                type: "egress",
                 data: src,
                 organization_id: organizationId
             });
