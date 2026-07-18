@@ -1,3 +1,10 @@
+## [1.21.2](https://github.com/CoCreate-app/CoCreate-file-server/compare/v1.21.1...v1.21.2) (2026-07-18)
+
+
+### Bug Fixes
+
+* replace wsManager bandwidth emissions with process usage events ([fda39a2](https://github.com/CoCreate-app/CoCreate-file-server/commit/fda39a2ddbd8930b84ce6f280006bdc13faed77c))
+
 ## [1.21.1](https://github.com/CoCreate-app/CoCreate-file-server/compare/v1.21.0...v1.21.1) (2026-07-17)
 
 
