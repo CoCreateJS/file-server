@@ -1,3 +1,10 @@
+## [1.21.3](https://github.com/CoCreate-app/CoCreate-file-server/compare/v1.21.2...v1.21.3) (2026-07-19)
+
+
+### Bug Fixes
+
+* set default branch to main ([2c7a527](https://github.com/CoCreate-app/CoCreate-file-server/commit/2c7a52710a56cf7d5ccec695748fb01428b9b361))
+
 ## [1.21.2](https://github.com/CoCreate-app/CoCreate-file-server/compare/v1.21.1...v1.21.2) (2026-07-18)
 
 
