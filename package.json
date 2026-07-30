@@ -37,7 +37,7 @@
   "type": "module",
   "main": "./src/index.js",
   "dependencies": {
-    "@cocreate/server-side-render": "^1.16.0",
-    "@cocreate/sitemap": "^1.8.0"
+    "@cocreate/server-side-render": "^1.17.0",
+    "@cocreate/sitemap": "^1.9.0"
   }
 }
