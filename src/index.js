@@ -1,8 +1,8 @@
 /********************************************************************************
- * Copyright (C) 2023 CoCreate and Contributors.
+ * Copyright (C) 2026 CoCreate and Contributors.
  *
  * This program is free software: you can redistribute it and/or modify
- * Wu under the terms of the GNU Affero General Public License as published
+ * it under the terms of the GNU Affero General Public License as published
  * by the Free Software Foundation, either version 3 of the License, or
  * (at your option) any later version.
  *
@@ -23,27 +23,57 @@
 
 import * as render from '@cocreate/server-side-render';
 import * as sitemap from '@cocreate/sitemap';
+import config from '@cocreate/config';
+import { dotNotationToObject } from '@cocreate/utils';
 
-// Module-level reference injected on-demand during boot to prevent ESM circular loops
+// Module-level reference injected during boot to prevent ESM circular loops
 let server = null;
 
+// Module default configuration
+let fileServerConfig = {
+    defaultCacheControl: 'public, max-age=3600',
+    enableSitemapCheck: true,
+    enableThemeDetection: true
+};
+
 /**
- * Initializes the File Server module by injecting the parent orchestrator context.
- * Bypasses ESM static compile cycles entirely.
- * @param {Object} Server - CoCreateServer context instance.
+ * Loads file server configuration using @cocreate/config and queries database overrides
+ * for 'fileServer' configurations.
+ * 
+ * @returns {Promise<Object>} Resolved configuration object
  */
-export function init(Server) {    
-    server = Server;   
-    return FileServer 
+async function loadConfig() {
+    const sysConfig = await config.get('fileServer');
+
+    let dbConfig = null;
+    if (server && server.organization_id) {
+        dbConfig = await config.query({
+            type: 'fileServer',
+            organization_id: server.organization_id,
+            server: server.host,
+            cluster: server.cluster_id
+        });
+    }
+
+    if (sysConfig) {
+        dotNotationToObject(fileServerConfig, sysConfig);
+    }
+
+    if (dbConfig) {
+        dotNotationToObject(fileServerConfig, dbConfig);
+    }
+
+    return fileServerConfig;
 }
 
 /**
- * Main stateless entry point for the CoCreate File System request handler.
- * Now cleanly self-contained, handling its own urlObject parsing and organization lookups.
+ * Main entry point for the CoCreate File System request handler.
+ * Handles urlObject parsing, organization lookups, localization, theme detection, and rendering.
+ * 
  * @param {Object} req - Native Node HTTP request object
  * @param {Object} res - Native Node HTTP response object
  */
-export async function send(req, res) {
+async function send(req, res) {
     try {
         const activeCrud = server ? server.crud : null;
         
@@ -110,7 +140,7 @@ export async function send(req, res) {
         }
 
         // 3. Theme Detection
-        const theme = detectTheme(req, res);
+        const theme = fileServerConfig.enableThemeDetection ? detectTheme(req, res) : null;
 
         // 4. Resolve exact file resource and status code
         const { file, src, statusCode, resolvedPathname } = await resolveFile({
@@ -161,7 +191,7 @@ export async function send(req, res) {
         });
 
         // 8. Async Sitemap Check
-        if (file) {
+        if (fileServerConfig.enableSitemapCheck && file) {
             await sitemap.check({ file, host: hostname, crud: activeCrud });
         }
 
@@ -172,15 +202,11 @@ export async function send(req, res) {
     }
 }
 
-// ==========================================
-// Isolated Helper Functions
-// ==========================================
-
 /**
  * Normalizes slash-ending paths, resolves files via wildcard mappings,
  * handles 404/403 fallbacks, and fetches asset sources.
  */
-export async function resolveFile({ pathname, hostname, organizationId, crud }) {
+async function resolveFile({ pathname, hostname, organizationId, crud }) {
     const activeCrud = crud || (server ? server.crud : null);
     let statusCode = 200;
     let file;
@@ -269,7 +295,7 @@ export async function resolveFile({ pathname, hostname, organizationId, crud }) 
         src = file?.src || "";
     }
 
-    // Bind source markup and calculated status directly onto the file document for downstream consumers (like the SSR engine)
+    // Bind source markup and calculated status directly onto the file document for downstream consumers
     if (file) {
         file.src = src;
         file.status = statusCode;
@@ -281,7 +307,7 @@ export async function resolveFile({ pathname, hostname, organizationId, crud }) 
 /**
  * Specifically resolves, tracks, and mirrors system fallbacks from global scopes.
  */
-export async function getDefaultFile({ fileName, hostname, organizationId, crud }) {
+async function getDefaultFile({ fileName, hostname, organizationId, crud }) {
     const activeCrud = crud || (server ? server.crud : null);
     const queryData = {
         method: "object.read",
@@ -373,7 +399,7 @@ export async function getDefaultFile({ fileName, hostname, organizationId, crud 
 /**
  * Calculates a directory wildcard path pattern representation.
  */
-export function getWildcardPath(pathname) {
+function getWildcardPath(pathname) {
     const lastIndex = pathname.lastIndexOf("/");
     const wildcardPath = pathname.substring(0, lastIndex + 1);
     const wildcardName = pathname.substring(lastIndex + 1);
@@ -390,7 +416,7 @@ export function getWildcardPath(pathname) {
 /**
  * Detects color scheme from HTTP headers and updates client indicators.
  */
-export function detectTheme(req, res) {
+function detectTheme(req, res) {
     let theme;
     const headerValue = req?.headers && (
         req.headers["sec-ch-prefers-color-scheme"] ||
@@ -413,7 +439,7 @@ export function detectTheme(req, res) {
 /**
  * Standardizes directory matching redirection configurations.
  */
-export function handleTrailingSlash(pathname, urlObject, res) {
+function handleTrailingSlash(pathname, urlObject, res) {
     if (!pathname.endsWith("/") && !pathname.startsWith("/.well-known/acme-challenge")) {
         const lastSegment = pathname.split("/").slice(-1)[0];
         if (!lastSegment.includes(".")) {
@@ -429,7 +455,7 @@ export function handleTrailingSlash(pathname, urlObject, res) {
 /**
  * Extracts explicit or implicit preferred localization tokens from endpoints.
  */
-export function parseLanguage(pathname, headers) {
+function parseLanguage(pathname, headers) {
     const bcp47Regex = /^\/([a-zA-Z]{2,3}(?:-[a-zA-Z0-9]{2,8})?)\//;
     const langMatch = pathname.match(bcp47Regex);
     let lang, langRegion;
@@ -455,10 +481,10 @@ export function parseLanguage(pathname, headers) {
 /**
  * Formats, cleans, parses, and executes rendering transformations based on content types.
  */
-export async function normalizeSrc({ src, contentType, pathname, file, organization, urlObject, langRegion, lang, theme, crud }) {
+async function normalizeSrc({ src, contentType, pathname, file, organization, urlObject, langRegion, lang, theme, crud }) {
     const activeCrud = crud || (server ? server.crud : null);
     const isBase64Only = (s) =>
-        typeof s === "string" && /^[A-Za-z0-9+/]+={0,2}$/.test(s) && s.length % 4 === 0;
+        typeof s === "string" && s.length > 0 && /^[A-Za-z0-9+/=\-_]+$/.test(s.replace(/\s+/g, '')) && s.replace(/\s+/g, '').length % 4 === 0;
 
     const parseDataUri = (s) => {
         const m = /^data:([^;]+)(;base64)?,(.*)$/is.exec(s);
@@ -469,11 +495,25 @@ export async function normalizeSrc({ src, contentType, pathname, file, organizat
     // Fonts
     if (contentType.startsWith("font/") || /\.(woff2?|ttf|otf)$/i.test(pathname)) {
         if (Buffer.isBuffer(src)) return src;
-        if (typeof src !== "string") throw new Error("Invalid font src");
-        const d = parseDataUri(src);
-        if (d?.isBase64) return Buffer.from(d.data, "base64");
-        if (isBase64Only(src)) return Buffer.from(src, "base64");
-        throw new Error("Font data is not valid base64 or data URI");
+        if (typeof src !== "string") return Buffer.from("");
+        
+        const cleanedSrc = src.trim();
+        const d = parseDataUri(cleanedSrc);
+        if (d?.isBase64) {
+            return Buffer.from(d.data.replace(/\s+/g, ''), "base64");
+        }
+
+        const stripped = cleanedSrc.replace(/\s+/g, '').replace(/-/g, '+').replace(/_/g, '/');
+        if (isBase64Only(stripped)) {
+            return Buffer.from(stripped, "base64");
+        }
+
+        // Graceful fallback for binary or raw font strings instead of throwing
+        try {
+            return Buffer.from(src, "binary");
+        } catch (_) {
+            return Buffer.from(src);
+        }
     }
 
     // Data URIs
@@ -517,7 +557,6 @@ export async function normalizeSrc({ src, contentType, pathname, file, organizat
 
     // HTML rendering
     if (contentType === "text/html") {
-        // Adapter Closure to independently fetch isolated templates/chunks for SSR
         const recursiveResolve = async (nestedPathname) => {
             const resolved = await resolveFile({
                 pathname: nestedPathname,
@@ -552,9 +591,8 @@ export async function normalizeSrc({ src, contentType, pathname, file, organizat
 /**
  * Handles setting response headers, caching guidelines, bandwidth tracking, and returning binary strings.
  */
-export async function sendResponse({ res, src, statusCode, headers, file, organizationId, crud, organizationCacheControl }) {
+async function sendResponse({ res, src, statusCode, headers, file, organizationId, crud, organizationCacheControl }) {
     try {
-        const activeCrud = crud || (server ? server.crud : null);
         let cacheControl;
         if (statusCode >= 400) {
             cacheControl = "no-cache, no-store, must-revalidate";
@@ -566,7 +604,7 @@ export async function sendResponse({ res, src, statusCode, headers, file, organi
                 cacheControl = val;
             }
         } else {
-            cacheControl = organizationCacheControl || "public, max-age=3600";
+            cacheControl = organizationCacheControl || fileServerConfig.defaultCacheControl || "public, max-age=3600";
         }
 
         headers["Cache-Control"] = cacheControl;
@@ -595,17 +633,25 @@ export async function sendResponse({ res, src, statusCode, headers, file, organi
         console.error("Error finalizing response payload:", error);
     }
 }
- const FileServer = {
-    init,
-    send,
-    resolveFile,
-    getDefaultFile,
-    getWildcardPath,
-    detectTheme,
-    handleTrailingSlash,
-    parseLanguage,
-    normalizeSrc,
-    sendResponse
+
+/**
+ * Initializes the FileServer module.
+ * 
+ * @param {Object} serverInstance - Core server instance
+ * @returns {Promise<Object>} FileServer interface object containing methods and config
+ */
+export async function init(serverInstance) {
+    server = serverInstance;
+
+    await loadConfig();
+
+    const fileServer = {
+        config: fileServerConfig,
+        send,
+        resolveFile
+    };
+
+    return fileServer;
 }
-// Default export added to enforce standard import convention across the platform
-export default FileServer;
+
+export default { init };
