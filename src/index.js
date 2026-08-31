@@ -220,7 +220,7 @@ async function resolveFile({ pathname, hostname, organizationId, crud }) {
         host: hostname,
         array: "files",
         organization_id: organizationId,
-        $filter: {
+        filter: {
             query: {
                 host: { $in: [hostname, "*"] },
                 pathname
@@ -251,7 +251,7 @@ async function resolveFile({ pathname, hostname, organizationId, crud }) {
     // 2. Wildcard fallback
     if (!file) {
         const wildcardPath = getWildcardPath(pathname);
-        queryData.$filter.query.pathname = wildcardPath;
+        queryData.filter.query.pathname = wildcardPath;
         const result = await activeCrud.send(queryData);
         file = result?.object?.[0];
     }
@@ -314,7 +314,7 @@ async function getDefaultFile({ fileName, hostname, organizationId, crud }) {
         host: hostname,
         array: "files",
         organization_id: organizationId,
-        $filter: {
+        filter: {
             query: {
                 host: { $in: [hostname, "*"] },
                 pathname: fileName
@@ -333,11 +333,11 @@ async function getDefaultFile({ fileName, hostname, organizationId, crud }) {
     }
 
     // Search global scope platform database
-    queryData.$filter.query.host.$in = ["*"];
+    queryData.filter.query.host.$in = ["*"];
     queryData.organization_id = process.env.organization_id;
 
     if (fileName.startsWith("/admin")) {
-        queryData.$filter.query.pathname = "/superadmin" + fileName.replace("/admin", "");
+        queryData.filter.query.pathname = "/superadmin" + fileName.replace("/admin", "");
     }
 
     defaultFile = await activeCrud.send(queryData);
