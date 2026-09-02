@@ -593,26 +593,49 @@ async function normalizeSrc({ src, contentType, pathname, file, organization, ur
  */
 async function sendResponse({ res, src, statusCode, headers, file, organizationId, crud, organizationCacheControl }) {
     try {
+        const responseHeaders = { ...headers };
+        const getHeaderKey = (name) => Object.keys(responseHeaders)
+            .find((key) => key.toLowerCase() === name.toLowerCase());
+        const getHeader = (name) => {
+            const key = getHeaderKey(name);
+            return key ? responseHeaders[key] : undefined;
+        };
+        const setHeader = (name, value) => {
+            const key = getHeaderKey(name);
+            if (key && key !== name) delete responseHeaders[key];
+            responseHeaders[name] = value;
+        };
+
+        if (file?.headers && typeof file.headers === "object" && !Array.isArray(file.headers)) {
+            for (const [name, value] of Object.entries(file.headers)) {
+                if (value !== undefined && value !== null) setHeader(name, value);
+            }
+        }
+
         let cacheControl;
         if (statusCode >= 400) {
             cacheControl = "no-cache, no-store, must-revalidate";
-        } else if (file && file["cache-control"] !== undefined && file["cache-control"] !== null) {
-            const val = file["cache-control"];
-            if (typeof val === "number" || /^\s*\d+\s*$/.test(val)) {
-                cacheControl = `public, max-age=${String(val).trim()};`;
-            } else {
-                cacheControl = val;
-            }
+        } else if (getHeader("Cache-Control") !== undefined) {
+            cacheControl = getHeader("Cache-Control");
         } else {
             cacheControl = organizationCacheControl || fileServerConfig.defaultCacheControl || "public, max-age=3600";
         }
 
-        headers["Cache-Control"] = cacheControl;
-        headers["Accept-CH"] = "Sec-CH-Prefers-Color-Scheme";
-        headers["Accept-CH-Lifetime"] = "86400";
-        headers["Vary"] = headers["Vary"]
-            ? headers["Vary"] + ", Sec-CH-Prefers-Color-Scheme"
-            : "Sec-CH-Prefers-Color-Scheme";
+        if (typeof cacheControl === "number" || /^\s*\d+\s*$/.test(cacheControl)) {
+            cacheControl = `public, max-age=${String(cacheControl).trim()};`;
+        }
+        setHeader("Cache-Control", cacheControl);
+        if (getHeader("Accept-CH") === undefined) {
+            setHeader("Accept-CH", "Sec-CH-Prefers-Color-Scheme");
+        }
+        if (getHeader("Accept-CH-Lifetime") === undefined) {
+            setHeader("Accept-CH-Lifetime", "86400");
+        }
+        const vary = getHeader("Vary");
+        setHeader("Vary", vary
+            ? vary + ", Sec-CH-Prefers-Color-Scheme"
+            : "Sec-CH-Prefers-Color-Scheme"
+        );
 
         if (src instanceof Uint8Array || Buffer.isBuffer(src)) {
             // Binary formats passed directly
@@ -627,7 +650,7 @@ async function sendResponse({ res, src, statusCode, headers, file, organizationI
                 organization_id: organizationId
             });
         }
-        res.writeHead(statusCode, headers);
+        res.writeHead(statusCode, responseHeaders);
         res.end(src);
     } catch (error) {
         console.error("Error finalizing response payload:", error);
