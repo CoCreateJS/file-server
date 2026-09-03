@@ -152,6 +152,7 @@ async function send(req, res) {
 
         // 5. Language Localization Matching
         const { lang, langRegion } = parseLanguage(resolvedPathname, req?.headers);
+        const state = req?.headers?.["x-state"] || req?.headers?.state;
 
         let contentType = file?.["content-type"] || "text/html";
 
@@ -166,6 +167,7 @@ async function send(req, res) {
             langRegion,
             lang,
             theme,
+            state,
             crud: activeCrud
         });
 
@@ -481,7 +483,7 @@ function parseLanguage(pathname, headers) {
 /**
  * Formats, cleans, parses, and executes rendering transformations based on content types.
  */
-async function normalizeSrc({ src, contentType, pathname, file, organization, urlObject, langRegion, lang, theme, crud }) {
+async function normalizeSrc({ src, contentType, pathname, file, organization, urlObject, langRegion, lang, theme, state, crud }) {
     const activeCrud = crud || (server ? server.crud : null);
     const isBase64Only = (s) =>
         typeof s === "string" && s.length > 0 && /^[A-Za-z0-9+/=\-_]+$/.test(s.replace(/\s+/g, '')) && s.replace(/\s+/g, '').length % 4 === 0;
@@ -574,6 +576,7 @@ async function normalizeSrc({ src, contentType, pathname, file, organization, ur
             langRegion,
             lang,
             theme,
+            state,
             resolveFile: recursiveResolve,
             crud: activeCrud
         });
