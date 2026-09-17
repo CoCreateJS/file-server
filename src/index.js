@@ -114,26 +114,6 @@ async function send(req, res) {
         res.setHeader("Access-Control-Allow-Methods", "");
         res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
 
-        const wsManager = server ? server.wsManager : null;
-        const active = wsManager ? wsManager.organizations.get(organizationId) : true;
-        if (active === false) {
-            const balanceFalse = await getDefaultFile({ fileName: "/balanceFalse.html", hostname, organizationId, crud: activeCrud });
-            sendResponse({
-                res,
-                src: balanceFalse.object[0].src,
-                statusCode: 403,
-                headers: {
-                    "Content-Type": balanceFalse.object[0]["content-type"] || "text/html",
-                    "Account-Balance": "false",
-                    storage: organization.storage
-                },
-                file: balanceFalse.object[0],
-                organizationId,
-                crud: activeCrud
-            });
-            return;
-        }
-
         // 2. Trailing Slash Redirect
         if (handleTrailingSlash(pathname, urlObject, res)) {
             return; // Redirect occurred, execution halted
