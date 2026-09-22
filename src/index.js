@@ -24,6 +24,7 @@
 import * as render from '@cocreate/server-side-render';
 import * as sitemap from '@cocreate/sitemap';
 import config from '@cocreate/config';
+import { getCachePolicy, getLastModified, responseCacheControl } from './cachePolicy.js';
 import { dotNotationToObject } from '@cocreate/utils';
 
 // Module-level reference injected during boot to prevent ESM circular loops
@@ -66,6 +67,27 @@ async function loadConfig() {
     return fileServerConfig;
 }
 
+async function createRequestSession(req, organizationId, hostname) {
+    const authorization = req.headers.authorization;
+    let token = typeof authorization === "string"
+        ? authorization.match(/^Bearer\s+(.+)$/i)?.[1] : null;
+    if (!token) {
+        const cookie = (req.headers.cookie || "").split(";")
+            .map(value => value.trim()).find(value => value.startsWith("token="));
+        if (cookie) {
+            try { token = decodeURIComponent(cookie.slice(6)); } catch { /* Invalid cookie. */ }
+        }
+    }
+    let session = {};
+    if (token && server?.authenticate) {
+        try {
+            const decoded = await server.authenticate.decodeToken(token, organizationId, undefined, hostname);
+            if (decoded?.user_id && decoded.expires > Date.now()) session = decoded;
+        } catch { /* Invalid sessions remain anonymous. */ }
+    }
+    return { user_id: session.user_id || null, expires: session.expires || null, policies: [] };
+}
+
 /**
  * Main entry point for the CoCreate File System request handler.
  * Handles urlObject parsing, organization lookups, localization, theme detection, and rendering.
@@ -76,7 +98,7 @@ async function loadConfig() {
 async function send(req, res) {
     try {
         const activeCrud = server ? server.crud : null;
-        
+
         // Parse the URL structure internally from the incoming request
         const urlObject = new URL(`http://${req.headers.host || 'localhost'}${req.url}`);
         const hostname = urlObject.hostname;
@@ -108,6 +130,7 @@ async function send(req, res) {
         }
 
         const organizationId = organization._id;
+        const session = await createRequestSession(req, organizationId, hostname);
         res.setHeader("organization", organizationId);
         res.setHeader("storage", !!organization.storage);
         res.setHeader("Access-Control-Allow-Origin", "*");
@@ -121,14 +144,26 @@ async function send(req, res) {
 
         // 3. Theme Detection
         const theme = fileServerConfig.enableThemeDetection ? detectTheme(req, res) : null;
+        console.log("[theme:request]", {
+            pathname,
+            enabled: fileServerConfig.enableThemeDetection,
+            detectedTheme: theme ?? null
+        });
 
         // 4. Resolve exact file resource and status code
-        const { file, src, statusCode, resolvedPathname } = await resolveFile({
+        const { file, src, statusCode, resolvedPathname, cachePolicy } = await resolveFile({
             pathname,
             hostname,
             organizationId,
-            crud: activeCrud
+            crud: activeCrud,
+            session,
+            request: req
         });
+
+        if (statusCode === 304) {
+            await sendResponse({ res, src: null, statusCode, file, organizationId, cachePolicies: session.policies });
+            return;
+        }
 
         // 5. Language Localization Matching
         const { lang, langRegion } = parseLanguage(resolvedPathname, req?.headers);
@@ -148,17 +183,10 @@ async function send(req, res) {
             lang,
             theme,
             state,
+            session,
             crud: activeCrud
         });
 
-        let modifiedOn = file?.modified || file?.created;
-        if (modifiedOn) {
-            modifiedOn = modifiedOn.on;
-            if (modifiedOn instanceof Date) {
-                modifiedOn = modifiedOn.toISOString();
-            }
-            res.setHeader("Last-Modified", modifiedOn);
-        }
 
         // 7. Send final response
         sendResponse({
@@ -169,6 +197,7 @@ async function send(req, res) {
             file,
             organizationId: organizationId,
             crud: activeCrud,
+            cachePolicies: session.policies,
             organizationCacheControl: organization["cache-control"]
         });
 
@@ -188,7 +217,7 @@ async function send(req, res) {
  * Normalizes slash-ending paths, resolves files via wildcard mappings,
  * handles 404/403 fallbacks, and fetches asset sources.
  */
-async function resolveFile({ pathname, hostname, organizationId, crud }) {
+async function resolveFile({ pathname, hostname, organizationId, crud, session, request, recursive = false }) {
     const activeCrud = crud || (server ? server.crud : null);
     let statusCode = 200;
     let file;
@@ -232,8 +261,8 @@ async function resolveFile({ pathname, hostname, organizationId, crud }) {
 
     // 2. Wildcard fallback
     if (!file) {
-        const wildcardPath = getWildcardPath(pathname);
-        queryData.filter.query.pathname = wildcardPath;
+        const fallbackPath = getWildcardPath(pathname);
+        queryData.filter.query.pathname = fallbackPath;
         const result = await activeCrud.send(queryData);
         file = result?.object?.[0];
     }
@@ -245,45 +274,52 @@ async function resolveFile({ pathname, hostname, organizationId, crud }) {
         file = pageNotFound?.object?.[0];
     }
 
-    // 4. Fallback to 403 if not public
-    if (file && (!file["public"] || file["public"] === "false")) {
-        statusCode = 403;
-        const pageForbidden = await getDefaultFile({ fileName: "/403.html", hostname, organizationId, crud: activeCrud });
-        file = pageForbidden?.object?.[0];
-    }
-
-    // 5. Fetch file source markup
-    let src = file?.src || "";
-    if (file && !file["src"]) {
-        try {
-            const fileSrc = await activeCrud.send({
-                method: "object.read",
-                host: hostname,
-                array: file["array"],
-                object: { _id: file._id },
-                organization_id: organizationId
-            });
-            src = fileSrc?.[file["name"]] || "";
-        } catch (err) {
-            console.error("Error fetching file src:", err);
+    let cachePolicy = getCachePolicy(file, { headers: request?.headers, method: request?.method, recursive });
+    if (statusCode === 200 && cachePolicy.policy !== "public") {
+        if (!session?.user_id || session.expires <= Date.now()) {
+            statusCode = 403;
+        } else if (cachePolicy.policy === "authorize" && cachePolicy.expired) {
+            const authorizationRequest = {
+                method: "object.read", host: hostname, array: "files",
+                organization_id: organizationId,
+                filter: { query: { _id: file._id }, limit: 1 }
+            };
+            const permission = await server?.authorize?.check(authorizationRequest, session.user_id);
+            if (!permission || permission.error || (permission !== true && !permission.authorized)) statusCode = 403;
+            else {
+                const result = await activeCrud.send(permission === true ? authorizationRequest : permission.authorized);
+                const allowed = !result?.error && result?.object?.find(item => String(item._id) === String(file._id));
+                // A projection that excludes content must not trigger an unrestricted second read.
+                if (!allowed || allowed.src == null) statusCode = 403;
+                else file = allowed;
+            }
         }
     }
 
-    // 6. Ultimate 404 payload fallback if source resolves empty
-    if (!src && file) {
+    if (statusCode === 403) {
+        const forbidden = await getDefaultFile({ fileName: "/403.html", hostname, organizationId, crud: activeCrud });
+        file = forbidden?.object?.[0];
+    } else if (statusCode === 200) statusCode = cachePolicy.status;
+
+    let src = statusCode === 304 ? null : file?.src || "";
+    if (statusCode !== 304 && file && file.src == null) {
+        const result = await activeCrud.send({
+            method: "object.read", host: hostname, array: file.array,
+            object: { _id: file._id }, organization_id: organizationId
+        });
+        src = result?.[file.name] || "";
+    }
+    if (statusCode === 200 && !src) {
         statusCode = 404;
-        const pageNotFound = await getDefaultFile({ fileName: "/404.html", hostname, organizationId, crud: activeCrud });
-        file = pageNotFound?.object?.[0];
+        const missing = await getDefaultFile({ fileName: "/404.html", hostname, organizationId, crud: activeCrud });
+        file = missing?.object?.[0];
         src = file?.src || "";
     }
-
-    // Bind source markup and calculated status directly onto the file document for downstream consumers
-    if (file) {
-        file.src = src;
-        file.status = statusCode;
-    }
-
-    return { file, src, statusCode, resolvedPathname: pathname };
+    if (statusCode >= 400) cachePolicy = { ...cachePolicy, cacheControl: "no-store", status: statusCode };
+    if (!recursive || statusCode !== 304) session?.policies?.push(cachePolicy);
+    // Return per-request metadata without mutating a shared CRUD document.
+    file = { ...file, src, status: statusCode };
+    return { file, src, statusCode, resolvedPathname: pathname, cachePolicy };
 }
 
 /**
@@ -401,10 +437,10 @@ function getWildcardPath(pathname) {
 function detectTheme(req, res) {
     let theme;
     const headerValue = req?.headers && (
-        req.headers["sec-ch-prefers-color-scheme"] ||
-        req.headers["prefers-color-scheme"] ||
         req.headers["x-prefers-color-scheme"] ||
-        req.headers["x-color-scheme"]
+        req.headers["x-color-scheme"] ||
+        req.headers["sec-ch-prefers-color-scheme"] ||
+        req.headers["prefers-color-scheme"]
     );
     if (typeof headerValue === "string") {
         const token = headerValue.split(",")[0].trim().replace(/^"|"$/g, "").toLowerCase();
@@ -463,7 +499,7 @@ function parseLanguage(pathname, headers) {
 /**
  * Formats, cleans, parses, and executes rendering transformations based on content types.
  */
-async function normalizeSrc({ src, contentType, pathname, file, organization, urlObject, langRegion, lang, theme, state, crud }) {
+async function normalizeSrc({ src, contentType, pathname, file, organization, urlObject, langRegion, lang, theme, state, session, crud }) {
     const activeCrud = crud || (server ? server.crud : null);
     const isBase64Only = (s) =>
         typeof s === "string" && s.length > 0 && /^[A-Za-z0-9+/=\-_]+$/.test(s.replace(/\s+/g, '')) && s.replace(/\s+/g, '').length % 4 === 0;
@@ -478,7 +514,7 @@ async function normalizeSrc({ src, contentType, pathname, file, organization, ur
     if (contentType.startsWith("font/") || /\.(woff2?|ttf|otf)$/i.test(pathname)) {
         if (Buffer.isBuffer(src)) return src;
         if (typeof src !== "string") return Buffer.from("");
-        
+
         const cleanedSrc = src.trim();
         const d = parseDataUri(cleanedSrc);
         if (d?.isBase64) {
@@ -544,6 +580,8 @@ async function normalizeSrc({ src, contentType, pathname, file, organization, ur
                 pathname: nestedPathname,
                 hostname: urlObject.hostname,
                 organizationId: organization._id,
+                session,
+                recursive: true,
                 crud: activeCrud
             });
             return resolved?.file || null;
@@ -574,7 +612,7 @@ async function normalizeSrc({ src, contentType, pathname, file, organization, ur
 /**
  * Handles setting response headers, caching guidelines, bandwidth tracking, and returning binary strings.
  */
-async function sendResponse({ res, src, statusCode, headers, file, organizationId, crud, organizationCacheControl }) {
+async function sendResponse({ res, src, statusCode, headers, file, organizationId, crud, organizationCacheControl, cachePolicies }) {
     try {
         const responseHeaders = { ...headers };
         const getHeaderKey = (name) => Object.keys(responseHeaders)
@@ -595,18 +633,11 @@ async function sendResponse({ res, src, statusCode, headers, file, organizationI
             }
         }
 
-        let cacheControl;
-        if (statusCode >= 400) {
-            cacheControl = "no-cache, no-store, must-revalidate";
-        } else if (getHeader("Cache-Control") !== undefined) {
-            cacheControl = getHeader("Cache-Control");
-        } else {
-            cacheControl = organizationCacheControl || fileServerConfig.defaultCacheControl || "public, max-age=3600";
-        }
-
-        if (typeof cacheControl === "number" || /^\s*\d+\s*$/.test(cacheControl)) {
-            cacheControl = `public, max-age=${String(cacheControl).trim()};`;
-        }
+        const modified = getLastModified(file);
+        if (modified && getHeader("Last-Modified") === undefined) setHeader("Last-Modified", modified);
+        const cacheControl = statusCode >= 400
+            ? "no-cache, no-store, must-revalidate"
+            : responseCacheControl(cachePolicies?.length ? cachePolicies : [getCachePolicy(file)]);
         setHeader("Cache-Control", cacheControl);
         if (getHeader("Accept-CH") === undefined) {
             setHeader("Accept-CH", "Sec-CH-Prefers-Color-Scheme");
@@ -614,11 +645,12 @@ async function sendResponse({ res, src, statusCode, headers, file, organizationI
         if (getHeader("Accept-CH-Lifetime") === undefined) {
             setHeader("Accept-CH-Lifetime", "86400");
         }
+        if (getHeader("Critical-CH") === undefined) {
+            setHeader("Critical-CH", "Sec-CH-Prefers-Color-Scheme");
+        }
         const vary = getHeader("Vary");
-        setHeader("Vary", vary
-            ? vary + ", Sec-CH-Prefers-Color-Scheme"
-            : "Sec-CH-Prefers-Color-Scheme"
-        );
+        const themeHeaders = "Sec-CH-Prefers-Color-Scheme, Prefers-Color-Scheme, X-Prefers-Color-Scheme, X-Color-Scheme, X-State, State";
+        setHeader("Vary", vary === "*" ? "*" : vary ? `${vary}, ${themeHeaders}` : themeHeaders);
 
         if (src instanceof Uint8Array || Buffer.isBuffer(src)) {
             // Binary formats passed directly
@@ -634,7 +666,7 @@ async function sendResponse({ res, src, statusCode, headers, file, organizationI
             });
         }
         res.writeHead(statusCode, responseHeaders);
-        res.end(src);
+        res.end(statusCode === 304 ? undefined : src);
     } catch (error) {
         console.error("Error finalizing response payload:", error);
     }
