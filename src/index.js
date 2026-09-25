@@ -144,11 +144,6 @@ async function send(req, res) {
 
         // 3. Theme Detection
         const theme = fileServerConfig.enableThemeDetection ? detectTheme(req, res) : null;
-        console.log("[theme:request]", {
-            pathname,
-            enabled: fileServerConfig.enableThemeDetection,
-            detectedTheme: theme ?? null
-        });
 
         // 4. Resolve exact file resource and status code
         const { file, src, statusCode, resolvedPathname, cachePolicy } = await resolveFile({
