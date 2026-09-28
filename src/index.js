@@ -129,9 +129,9 @@ async function send(req, res) {
             return;
         }
 
+        const session = await createRequestSession(req, organization._id, hostname);
         const organizationId = organization._id;
-        const session = await createRequestSession(req, organizationId, hostname);
-        res.setHeader("organization", organizationId);
+        res.setHeader("organization", organization._id);
         res.setHeader("storage", !!organization.storage);
         res.setHeader("Access-Control-Allow-Origin", "*");
         res.setHeader("Access-Control-Allow-Methods", "");
@@ -273,7 +273,7 @@ async function resolveFile({ pathname, hostname, organizationId, crud, session, 
     if (statusCode === 200 && cachePolicy.policy !== "public") {
         if (!session?.user_id || session.expires <= Date.now()) {
             statusCode = 403;
-        } else if (cachePolicy.policy === "authorize" && cachePolicy.expired) {
+        } else if (cachePolicy.policy === "authorize") {
             const authorizationRequest = {
                 method: "object.read", host: hostname, array: "files",
                 organization_id: organizationId,

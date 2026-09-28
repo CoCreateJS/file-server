@@ -39,9 +39,9 @@ test('authorization runs before 304 and respects query exclusions',async()=>{
  assert.equal(result.statusCode,403);assert.equal(result.src,'/403.html');
  }
 });
-test('fresh expiry defers full authorization but not session authentication',async()=>{
+test('fresh expiry does not defer authorization or session authentication',async()=>{
  const api=setup({file:{_id:'file',src:'content',headers:{'cache-control':'must-revalidate',Expires:new Date(Date.now()+60000).toUTCString()}}});
- assert.equal((await resolve(api,{session})).statusCode,200);assert.equal(api.counts().checks,0);
+ assert.equal((await resolve(api,{session})).statusCode,200);assert.equal(api.counts().checks,1);
  assert.equal((await resolve(api)).statusCode,403);
 });
 test('immutable HTTP first fetch is 200; recursive file may defer to the client',async()=>{
