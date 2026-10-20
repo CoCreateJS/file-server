@@ -11,7 +11,7 @@ function directive(cacheControl, name) {
 }
 
 export function getLastModified(file) {
-    const value = getHeader(file?.headers, 'last-modified') || file?.modified?.on || file?.created?.on;
+    const value = getHeader(file?.headers, 'last-modified') || file?.updated?.on || file?.created?.on;
     const time = new Date(value).getTime();
     return Number.isFinite(time) ? new Date(time).toUTCString() : undefined;
 }
@@ -54,9 +54,9 @@ export function getCachePolicy(file, { headers = {}, method = 'GET', recursive =
                 if (matches.trim() === '*' || (etag &&
                     (matches.match(/(?:W\/)?"[^"]*"/g) || []).some(tag => tag.replace(/^W\//, '') === String(etag).replace(/^W\//, '')))) status = 304;
             } else {
-                const modified = Date.parse(getLastModified(file));
+                const updated = Date.parse(getLastModified(file));
                 const since = Date.parse(getHeader(headers, 'if-modified-since'));
-                if (Number.isFinite(modified) && Number.isFinite(since) && modified <= since) status = 304;
+                if (Number.isFinite(updated) && Number.isFinite(since) && updated <= since) status = 304;
             }
         }
     }
