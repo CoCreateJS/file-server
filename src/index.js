@@ -429,26 +429,30 @@ function getWildcardPath(pathname) {
 /**
  * Detects color scheme from HTTP headers and updates client indicators.
  */
-function detectTheme(req, res) {
-    let theme;
-    const headerValue = req?.headers && (
-        req.headers["x-prefers-color-scheme"] ||
-        req.headers["x-color-scheme"] ||
-        req.headers["sec-ch-prefers-color-scheme"] ||
-        req.headers["prefers-color-scheme"]
-    );
-    if (typeof headerValue === "string") {
-        const token = headerValue.split(",")[0].trim().replace(/^"|"$/g, "").toLowerCase();
-        if (token === "dark" || token === "light") {
-            theme = token;
-        }
-    }
-    if (theme && res) {
-        res.setHeader("X-Preferred-Color-Scheme", theme);
-    }
-    return theme;
-}
-
+function detectTheme(req, res) {
+    let theme;
+    const headers = req?.headers || {};
+    // Prefer the browser hint; custom headers provide a fallback for other clients.
+    for (const name of [
+        "sec-ch-prefers-color-scheme",
+        "x-prefers-color-scheme",
+        "x-color-scheme",
+        "prefers-color-scheme"
+    ]) {
+        const value = headers[name];
+        if (typeof value !== "string") continue;
+        const token = value.split(",")[0].trim().replace(/^"|"$/g, "").toLowerCase();
+        if (token === "dark" || token === "light") {
+            theme = token;
+            break;
+        }
+    }
+    if (theme && res) {
+        res.setHeader("X-Preferred-Color-Scheme", theme);
+    }
+    return theme;
+}
+
 /**
  * Standardizes directory matching redirection configurations.
  */
