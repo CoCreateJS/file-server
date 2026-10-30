@@ -15,6 +15,21 @@
   "publishConfig": {
     "access": "public"
   },
+  "cocreate": {
+    "environment": [
+      "server"
+    ],
+    "interface": {
+      "schemaVersion": 1,
+      "summary": "A simple file-server component in vanilla javascript. Easily configured using HTML5 data-attributes and/or JavaScript API.",
+      "source": "src/index.js",
+      "api": {
+        "exports": [
+          "init"
+        ]
+      }
+    }
+  },
   "scripts": {
     "start": "webpack --config webpack.config.js",
     "build": "webpack --mode=production --config webpack.config.js",
