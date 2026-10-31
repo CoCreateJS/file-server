@@ -22,7 +22,7 @@
 // For details, visit <https://CoCreateJS.com/licenses/> or contact us at sales@CoCreateJS.com.
 
 import * as render from '@cocreate/server-side-render';
-import * as sitemap from '@cocreate/sitemap';
+import * as sitemap from '@cocreate/server-sitemap';
 import config from '@cocreate/config';
 import { getCachePolicy, getLastModified, responseCacheControl } from './cachePolicy.js';
 import { decodeContent, getContentType } from '@cocreate/utils/file';
