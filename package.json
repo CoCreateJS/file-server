@@ -42,9 +42,9 @@
   "author": "CoCreate LLC",
   "license": "AGPL-3.0",
   "bugs": {
-    "url": "https://github.com/CoCreate-app/CoCreate-file-server/issues"
+    "url": "https://github.com/CoCreateJS/CoCreate-file-server/issues"
   },
-  "homepage": "https://cocreate.app/docs/file-server",
+  "homepage": "https://CoCreateJS.com/docs/file-server",
   "funding": {
     "type": "GitHub Sponsors ❤",
     "url": "https://github.com/sponsors/CoCreate-app"

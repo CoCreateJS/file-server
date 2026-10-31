@@ -19,7 +19,7 @@
 // Commercial Licensing Information:
 // For commercial use of this software without the copyleft provisions of the AGPLv3,
 // you must obtain a commercial license from CoCreate LLC.
-// For details, visit <https://cocreate.app/licenses/> or contact us at sales@cocreate.app.
+// For details, visit <https://CoCreateJS.com/licenses/> or contact us at sales@CoCreateJS.com.
 
 import * as render from '@cocreate/server-side-render';
 import * as sitemap from '@cocreate/sitemap';
