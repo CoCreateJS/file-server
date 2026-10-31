@@ -52,6 +52,7 @@
   "type": "module",
   "main": "./src/index.js",
   "dependencies": {
+    "@cocreate/utils": "^1.57.0",
     "@cocreate/config": "^1.21.0",
     "@cocreate/server-side-render": "^1.20.0",
     "@cocreate/sitemap": "^1.11.0"

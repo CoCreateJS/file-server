@@ -25,6 +25,7 @@ import * as render from '@cocreate/server-side-render';
 import * as sitemap from '@cocreate/sitemap';
 import config from '@cocreate/config';
 import { getCachePolicy, getLastModified, responseCacheControl } from './cachePolicy.js';
+import { decodeContent, getContentType } from '@cocreate/utils/file';
 import { dotNotationToObject } from '@cocreate/utils';
 
 // Module-level reference injected during boot to prevent ESM circular loops
@@ -164,12 +165,14 @@ async function send(req, res) {
         const { lang, langRegion } = parseLanguage(resolvedPathname, req?.headers);
         const state = req?.headers?.["x-state"] || req?.headers?.state;
 
-        let contentType = file?.["content-type"] || "text/html";
+        const contentType = file?.["content-type"] || getContentType({
+            value: src, pathname: resolvedPathname, fallback: "text/html"
+        });
 
         // 6. Output Normalization and Rendering
         const finalSrc = await normalizeSrc({
             src,
-            contentType,
+            contentType: getContentType({ contentType }),
             pathname: resolvedPathname,
             file,
             organization,
@@ -517,19 +520,19 @@ async function normalizeSrc({ src, contentType, pathname, file, organization, ur
         const cleanedSrc = src.trim();
         const d = parseDataUri(cleanedSrc);
         if (d?.isBase64) {
-            return Buffer.from(d.data.replace(/\s+/g, ''), "base64");
+            return decodeContent({ value: d.data, encoding: "base64", format: "bytes" });
         }
 
         const stripped = cleanedSrc.replace(/\s+/g, '').replace(/-/g, '+').replace(/_/g, '/');
         if (isBase64Only(stripped)) {
-            return Buffer.from(stripped, "base64");
+            return decodeContent({ value: stripped, encoding: "base64", format: "bytes" });
         }
 
         // Graceful fallback for binary or raw font strings instead of throwing
         try {
-            return Buffer.from(src, "binary");
+            return decodeContent({ value: src, encoding: "binary", format: "bytes" });
         } catch (_) {
-            return Buffer.from(src);
+            return decodeContent({ value: src, encoding: "utf8", format: "bytes" });
         }
     }
 
@@ -538,19 +541,19 @@ async function normalizeSrc({ src, contentType, pathname, file, organization, ur
         const d = parseDataUri(src);
         if (d) {
             if (d.mime === "image/svg+xml") {
-                if (d.isBase64) return Buffer.from(d.data, "base64").toString("utf8");
+                if (d.isBase64) return decodeContent({ value: d.data, encoding: "base64", format: "text" });
                 try {
-                    return decodeURIComponent(d.data);
+                    return decodeContent({ value: src, format: "text", fatal: true });
                 } catch (_) {
                     return d.data;
                 }
             }
             if (/^(image\/(png|jpe?g|webp|bmp|gif|x-icon|vnd\.microsoft\.icon|ico)|video\/.*|audio\/.*)$/i.test(d.mime)) {
-                if (d.isBase64) return Buffer.from(d.data, "base64");
+                if (d.isBase64) return decodeContent({ value: d.data, encoding: "base64", format: "bytes" });
             }
             if (!d.isBase64) {
                 try {
-                    return decodeURIComponent(d.data);
+                    return decodeContent({ value: src, format: "text", fatal: true });
                 } catch (_) {
                     return d.data;
                 }
@@ -567,7 +570,7 @@ async function normalizeSrc({ src, contentType, pathname, file, organization, ur
             contentType.startsWith("audio/") ||
             contentType === "application/octet-stream"
         ) {
-            return Buffer.from(src, "base64");
+            return decodeContent({ value: src, encoding: "base64", format: "bytes" });
         }
         return src;
     }

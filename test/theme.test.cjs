@@ -38,15 +38,15 @@ test('file-server forwards the browser hint through SSR to the attribute and met
     ]) {
         const theme = api.detectTheme({ headers: { 'sec-ch-prefers-color-scheme': hint } });
         const file = {
-            src: '<html state-id="theme" data-color-scheme=""><head></head><body>Admin</body></html>',
+            src: '<html state-id="theme" color-scheme=""><head></head><body>Admin</body></html>',
             pathname: '/admin/index.html'
         };
         const result = await api.normalizeSrc({
             src: file.src, contentType: 'text/html', pathname: file.pathname,
             file, organization: { _id: 'test' }, urlObject: new URL('https://example.test/admin/'),
-            theme, state: JSON.stringify({ theme: { 'data-color-scheme': saved } })
+            theme, state: JSON.stringify({ theme: { 'color-scheme': saved } })
         });
-        assert.match(result, new RegExp(`data-color-scheme="${expected}"`));
+        assert.match(result, new RegExp(`color-scheme="${expected}"`));
         assert.match(result, new RegExp(`<meta name="color-scheme" content="${expected}">`));
     }
 });
