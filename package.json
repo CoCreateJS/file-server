@@ -1,7 +1,7 @@
 {
   "name": "@cocreate/file-server",
   "version": "1.26.0",
-  "description": "A simple file-server component in vanilla javascript. Easily configured using HTML5 data-attributes and/or JavaScript API.",
+  "description": "Compatibility entry for the server file APIs now provided by @cocreate/file/server.",
   "keywords": [
     "file-server",
     "low-code",
@@ -37,9 +37,6 @@
   "type": "module",
   "main": "./src/index.js",
   "dependencies": {
-    "@cocreate/utils": "^1.57.0",
-    "@cocreate/config": "^1.21.0",
-    "@cocreate/server-side-render": "^1.20.0",
-    "@cocreate/server-sitemap": "^1.12.0"
+    "@cocreate/file": "^1.27.0"
   }
 }
